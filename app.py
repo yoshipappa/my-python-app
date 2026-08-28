@@ -1,4 +1,5 @@
 import os
+import hashlib
 import tempfile
 import time
 
@@ -9,7 +10,167 @@ from google.genai import types
 from pydantic import BaseModel, Field
 
 
-st.title("作業分析プロトタイプ3")
+st.set_page_config(
+    page_title="作業分析AI22",
+    page_icon="🎥",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
+
+
+
+# =========================
+# Authentication
+# =========================
+def _get_secret(name, default=None):
+    try:
+        return st.secrets.get(name, default)
+    except Exception:
+        return default
+
+
+def _get_allowed_emails():
+    try:
+        emails = st.secrets.get("access", {}).get("allowed_emails", [])
+    except Exception:
+        emails = []
+
+    if isinstance(emails, str):
+        emails = [emails]
+
+    return {
+        str(email).strip().lower()
+        for email in emails
+        if str(email).strip()
+    }
+
+
+def _google_auth_configured():
+    try:
+        auth = st.secrets.get("auth", {})
+        required = [
+            "redirect_uri",
+            "cookie_secret",
+            "client_id",
+            "client_secret",
+            "server_metadata_url",
+        ]
+        return all(str(auth.get(key, "")).strip() for key in required)
+    except Exception:
+        return False
+
+
+def _password_enabled():
+    try:
+        password = st.secrets.get("access", {}).get("app_password", "")
+        return bool(str(password).strip())
+    except Exception:
+        return False
+
+
+def render_login_gate():
+    google_configured = _google_auth_configured()
+
+    google_logged_in = False
+    google_email = ""
+    try:
+        google_logged_in = bool(st.user.is_logged_in)
+        if google_logged_in:
+            google_email = str(
+                getattr(st.user, "email", "") or ""
+            ).strip().lower()
+    except Exception:
+        google_logged_in = False
+
+    allowed_emails = _get_allowed_emails()
+
+    if google_logged_in:
+        if allowed_emails and google_email not in allowed_emails:
+            st.error("このGoogleアカウントは利用を許可されていません。")
+            st.caption(
+                f"ログイン中のアカウント: {google_email or 'メールアドレス取得不可'}"
+            )
+            st.button("Googleからログアウト", on_click=st.logout)
+            st.stop()
+
+        st.session_state.auth_method = "google"
+        st.session_state.auth_user_email = google_email
+        return
+
+    if st.session_state.get("password_authenticated", False):
+        return
+
+    st.title("作業分析AI")
+    st.write("ログインしてください。")
+
+    google_available = google_configured
+    password_available = _password_enabled()
+
+    if google_available:
+        st.subheader("Googleでログイン")
+        st.button(
+            "Googleアカウントでログイン",
+            on_click=st.login,
+            use_container_width=True,
+        )
+
+    if google_available and password_available:
+        st.divider()
+
+    if password_available:
+        st.subheader("パスワードでログイン")
+        password_input = st.text_input(
+            "パスワード",
+            type="password",
+            key="login_password_input",
+        )
+
+        if st.button("ログイン", type="primary", use_container_width=True):
+            expected = str(
+                st.secrets.get("access", {}).get("app_password", "")
+            )
+
+            import hmac
+
+            if hmac.compare_digest(password_input, expected):
+                st.session_state.password_authenticated = True
+                st.session_state.auth_method = "password"
+                st.session_state.auth_user_email = ""
+                st.rerun()
+            else:
+                st.error("パスワードが正しくありません。")
+
+    if not google_available and not password_available:
+        st.error(
+            "認証設定がありません。.streamlit/secrets.toml（Streamlit CloudのSecrets）"
+            "にGoogle認証またはaccess.app_passwordを設定してください。"
+        )
+
+    st.stop()
+
+
+def render_user_bar():
+    method = st.session_state.get("auth_method", "")
+    email = st.session_state.get("auth_user_email", "")
+
+    cols = st.columns([5, 1])
+    with cols[0]:
+        if method == "google" and email:
+            st.caption(f"ログイン中：{email}")
+        elif method == "password":
+            st.caption("ログイン中：パスワード認証")
+    with cols[1]:
+        if method == "google":
+            st.button("ログアウト", on_click=st.logout, use_container_width=True)
+        elif method == "password":
+            if st.button("ログアウト", use_container_width=True):
+                st.session_state.password_authenticated = False
+                st.session_state.auth_method = ""
+                st.session_state.auth_user_email = ""
+                st.rerun()
+
+
+st.title("作業分析AI")
 st.write("MP4をアップロードし、動画を再生しながら作業区間を記録できます。")
 
 
@@ -81,6 +242,22 @@ class MotionSegmentResult(BaseModel):
 
 class MotionAnalysisResults(BaseModel):
     segments: list[MotionSegmentResult] = Field(description="入力された作業区間ごとの動作分析結果。")
+
+
+class KaizenSuggestion(BaseModel):
+    priority: str = Field(description="優先度。高・中・低のいずれか。")
+    target_motion: str = Field(description="改善対象の動作分類。")
+    target_task: str = Field(description="改善対象の作業名。")
+    problem: str = Field(description="映像・動作データから見た問題点。")
+    evidence: str = Field(description="問題点を裏付ける具体的な根拠。時刻を含める。")
+    cause_hypothesis: str = Field(description="考えられる原因。仮説であることを明確にする。")
+    kaizen_action: str = Field(description="現場で実行可能な具体的改善案。")
+    expected_effect: str = Field(description="期待される効果。断定せず可能性として記載。")
+
+
+class KaizenAnalysis(BaseModel):
+    summary: str = Field(description="カイゼン分析の総括。")
+    suggestions: list[KaizenSuggestion] = Field(description="改善提案。最大5件程度。")
 
 
 def seconds_to_hms(total_seconds):
@@ -691,6 +868,44 @@ def build_motion_summary_rows(motion_analysis):
     return rows
 
 
+def analyze_kaizen_with_gemini(video_bytes, filename, segments, motion_analysis):
+    """作業区間・動作分類・動画映像を統合してカイゼン案を作る。"""
+    if not os.getenv("GEMINI_API_KEY"):
+        raise RuntimeError("GEMINI_API_KEY が設定されていません。Windowsの環境変数を確認してください。")
+    if not segments:
+        raise RuntimeError("分析対象の作業区間がありません。")
+    if motion_analysis is None:
+        raise RuntimeError("先に「AIで動作分類」を実行してください。")
+    client=genai.Client()
+    task_text="\n".join([f"{i}. {s.get('name','未設定')}; {seconds_to_hms(s['start'])}-{seconds_to_hms(s['end'])}; {seconds_to_hms(max(0,s['end']-s['start']))}" for i,s in enumerate(segments,1)])
+    motion_text="\n".join([f"作業{r.segment_index}={r.task_name}; {m.start_time}-{m.end_time}; {m.motion_type}; {m.description}" for r in motion_analysis.segments for m in r.motions])
+    tmp_path=None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False,suffix='.mp4') as tmp:
+            tmp.write(video_bytes); tmp_path=tmp.name
+        uploaded=client.files.upload(file=tmp_path)
+        while uploaded.state and uploaded.state.name not in {'ACTIVE','FAILED'}:
+            time.sleep(2); uploaded=client.files.get(name=uploaded.name)
+        if not uploaded.state or uploaded.state.name!='ACTIVE':
+            raise RuntimeError('Gemini側で動画の処理に失敗しました。')
+        prompt=f"""あなたは製造現場のカイゼン担当者です。動画映像、作業区間、動作分析を統合して改善案を作成してください。
+
+作業区間:
+{task_text}
+
+動作分析:
+{motion_text}
+
+不要な移動、運搬、待ち、持ち替え、取り直し、繰り返し動作、工具・部品配置、作業順序、姿勢、手の使い方、長時間区間、高頻度動作に注目してください。映像で確認できる事実・データ・原因仮説を区別し、evidenceには可能な限り時刻を含めてください。改善案は最大5件、優先度は高・中・低。効果は断定せず期待される効果として記載してください。安全性や品質に悪影響を与える案は避けてください。"""
+        response=client.models.generate_content(model='gemini-3.6-flash',contents=[uploaded,prompt],config=types.GenerateContentConfig(response_mime_type='application/json',response_schema=KaizenAnalysis))
+        parsed=getattr(response,'parsed',None)
+        return parsed if parsed is not None else KaizenAnalysis.model_validate_json(response.text)
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try: os.remove(tmp_path)
+            except OSError: pass
+
+
 # ----- session_state の初期化 -----
 
 # 作業マスタ
@@ -731,6 +946,9 @@ if "motion_analysis" not in st.session_state:
 # 動作別集計
 if "motion_summary" not in st.session_state:
     st.session_state.motion_summary = []
+
+if "kaizen_analysis" not in st.session_state:
+    st.session_state.kaizen_analysis = None
 
 # 古いデータに id / name が無い場合に付ける
 for segment in st.session_state.segments:
@@ -798,6 +1016,25 @@ uploaded_file = st.file_uploader("動画ファイルを選択してください"
 if uploaded_file is not None:
     # アップロードされたファイルの中身を読み取る
     video_bytes = uploaded_file.read()
+    video_hash = hashlib.sha256(video_bytes).hexdigest()
+
+    # 動画を切り替えたら前の分析結果を持ち越さない
+    if st.session_state.get("current_video_hash") != video_hash:
+        st.session_state.current_video_hash = video_hash
+        st.session_state.current_video_name = uploaded_file.name
+        st.session_state.segments = []
+        st.session_state.next_segment_id = 1
+        st.session_state.ai_results = []
+        st.session_state.ai_master_classified = False
+        st.session_state.ai_result_filename = ""
+        st.session_state.improvement_analysis = None
+        st.session_state.motion_analysis = None
+        st.session_state.motion_summary = []
+        st.session_state.kaizen_analysis = None
+        st.session_state.mark_start = None
+        st.session_state.mark_end = None
+        for key in ["start_h", "start_m", "start_s", "end_h", "end_m", "end_s"]:
+            st.session_state[key] = 0
 
     # OpenCV用に一時ファイルとして保存
     tmp_path = None
@@ -833,6 +1070,10 @@ if uploaded_file is not None:
 
     # アプリ画面内で動画を再生
     st.video(video_bytes)
+    st.caption(
+        "AI分析を実行すると、動画がGemini APIへ送信されます。"
+        "利用者にその点を明示したうえで分析を実行します。"
+    )
 
     # ----- Gemini AI分析 -----
     st.subheader("AIによる作業分析")
@@ -1098,7 +1339,21 @@ if uploaded_file is not None:
                         "説明": motion.description,
                     })
                 if motion_rows:
-                    st.dataframe(motion_rows, use_container_width=True, hide_index=True)
+                    if len(motion_rows) <= 12:
+                        for motion_row in motion_rows:
+                            with st.container(border=True):
+                                st.write(
+                                    f"**{motion_row['動作分類']}**  "
+                                    f"{motion_row['開始']} → {motion_row['終了']}  "
+                                    f"（{motion_row['動作時間']}）"
+                                )
+                                st.caption(motion_row["説明"])
+                    else:
+                        st.dataframe(
+                            motion_rows,
+                            use_container_width=True,
+                            hide_index=True,
+                        )
                 else:
                     st.write("動作要素を抽出できませんでした。")
 
@@ -1175,6 +1430,33 @@ if uploaded_file is not None:
             )
         else:
             st.write("動作別集計を作成できませんでした。")
+
+    # ----- AIカイゼン分析 -----
+    if st.session_state.motion_analysis is not None:
+        st.divider()
+        st.subheader("AIによるカイゼン分析")
+        st.write("動画・作業時間・動作分類を統合し、製造現場で検討できる具体的なカイゼン案を作成します。")
+        st.caption("動画をGemini APIへ送信します。")
+        if st.button("AIでカイゼン分析", type="primary"):
+            try:
+                with st.spinner("AIがカイゼン分析しています。"):
+                    st.session_state.kaizen_analysis=analyze_kaizen_with_gemini(video_bytes,uploaded_file.name,st.session_state.segments,st.session_state.motion_analysis)
+                st.success("カイゼン分析が完了しました。")
+            except Exception as exc:
+                st.error(f"カイゼン分析に失敗しました：{exc}")
+        if st.session_state.kaizen_analysis is not None:
+            a=st.session_state.kaizen_analysis
+            st.markdown("### カイゼン分析総括")
+            st.info(a.summary)
+            st.markdown("### カイゼン提案")
+            icons={"高":"🔴","中":"🟡","低":"🟢"}
+            for i,s in enumerate(a.suggestions,1):
+                with st.expander(f"{icons.get(s.priority,'')} {i}. {s.target_task} / {s.target_motion}（優先度：{s.priority}）",expanded=(i==1)):
+                    st.write("**問題点**"); st.write(s.problem)
+                    st.write("**根拠**"); st.write(s.evidence)
+                    st.write("**原因仮説**"); st.write(s.cause_hypothesis)
+                    st.write("**具体的カイゼン案**"); st.write(s.kaizen_action)
+                    st.write("**期待される効果**"); st.write(s.expected_effect)
 
     # ----- 現在位置から開始・終了を設定 -----
     st.subheader("現在位置の指定")
