@@ -11,12 +11,74 @@ from pydantic import BaseModel, Field
 
 
 st.set_page_config(
-    page_title="作業分析AI22",
+    page_title="作業分析AI",
     page_icon="🎥",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 
+# =========================
+# Dark theme
+# =========================
+st.markdown(
+    """
+    <style>
+    .stApp { background-color: #050505; color: #F5F5F5; }
+    .main .block-container { padding-top: 1.2rem; padding-bottom: 3rem; max-width: 1400px; }
+    [data-testid="stSidebar"] { background-color: #0B0B0B; }
+    h1, h2, h3, h4, h5, h6 { color: #FFFFFF !important; }
+    p, label, .stMarkdown, .stCaption { color: #E6E6E6; }
+
+    div[data-baseweb="input"] > div,
+    div[data-baseweb="select"] > div,
+    textarea, input {
+        background-color: #151515 !important;
+        color: #FFFFFF !important;
+        border-color: #3A3A3A !important;
+    }
+    input::placeholder, textarea::placeholder { color: #8E8E8E !important; }
+
+    .stButton > button {
+        background-color: #1A1A1A;
+        color: #FFFFFF;
+        border: 1px solid #444444;
+        border-radius: 8px;
+        min-height: 42px;
+    }
+    .stButton > button:hover {
+        background-color: #2A2A2A;
+        border-color: #777777;
+        color: #FFFFFF;
+    }
+    .stButton > button[kind="primary"] {
+        background-color: #2F7D32;
+        color: #FFFFFF;
+        border-color: #4CAF50;
+        font-weight: 700;
+    }
+    .stButton > button[kind="primary"]:hover {
+        background-color: #3F9143;
+        border-color: #66BB6A;
+    }
+
+    div[data-testid="stAlert"] { background-color: #111111; border: 1px solid #333333; color: #F5F5F5; }
+    div[data-testid="stExpander"] { background-color: #101010; border: 1px solid #2F2F2F; border-radius: 8px; }
+    div[data-testid="stDataFrame"] { background-color: #101010; border-radius: 8px; }
+    hr { border-color: #2B2B2B !important; }
+    section[data-testid="stFileUploaderDropzone"] { background-color: #111111; border: 1px dashed #505050; border-radius: 10px; }
+    div[data-testid="stSlider"] [role="slider"] { background-color: #4CAF50; }
+
+    @media (max-width: 768px) {
+        .main .block-container { padding-left: 0.75rem; padding-right: 0.75rem; padding-top: 0.9rem; }
+        .stButton > button { min-height: 46px; font-size: 1rem; }
+        h1 { font-size: 1.7rem !important; }
+        h2 { font-size: 1.35rem !important; }
+        h3 { font-size: 1.15rem !important; }
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 
 # =========================
@@ -171,6 +233,7 @@ def render_user_bar():
 
 
 st.title("作業分析AI")
+st.caption("AI Work Analysis")
 st.write("MP4をアップロードし、動画を再生しながら作業区間を記録できます。")
 
 
