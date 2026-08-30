@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 
 
 st.set_page_config(
-    page_title="作業分析AI",
+    page_title="作業分析AI+",
     page_icon="🎥",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -388,6 +388,51 @@ def apply_master_selection(segment_index, segment_id):
         del st.session_state[select_key]
 
 
+
+
+def generate_content_with_retry(client, contents, config=None, primary_model="gemini-3.6-flash", model=None):
+    """Gemini APIの一時的な503/429/500/504に対して自動再試行し、
+    primary_modelが連続して利用できない場合はgemini-3.7-flashへフォールバックする。
+    """
+    primary_model = model or primary_model
+    retry_delays = [5, 10, 20]
+    retryable_codes = {500, 503, 504, 429}
+    last_error = None
+
+    for attempt, delay in enumerate([0] + retry_delays):
+        if delay:
+            time.sleep(delay)
+        try:
+            return client.models.generate_content(
+                model=primary_model,
+                contents=contents,
+                config=config,
+            )
+        except Exception as e:
+            last_error = e
+            status_code = getattr(e, "code", None)
+            if status_code is None:
+                status_code = getattr(e, "status_code", None)
+            if status_code not in retryable_codes:
+                raise
+            if attempt < len(retry_delays):
+                st.warning(
+                    f"Gemini APIが一時的に混雑しています。自動的に再試行します（{attempt + 1}/3）。"
+                )
+
+    # 3.6 Flashが混雑している場合は、接続確認済みの3.7 Flashへフォールバック
+    fallback_model = "gemini-3.7-flash"
+    try:
+        st.info("Gemini 3.6 Flashが混雑しているため、Gemini 3.7 Flashへ切り替えて再試行します。")
+        return client.models.generate_content(
+            model=fallback_model,
+            contents=contents,
+            config=config,
+        )
+    except Exception:
+        raise last_error
+
+
 def parse_mmss(value):
     """MM:SS または HH:MM:SS を秒に変換する。失敗時はNone。"""
     try:
@@ -458,7 +503,7 @@ def run_gemini_video_analysis(video_bytes, filename, video_duration_seconds=None
 """
 
         # 現在の google-genai SDK で動作する generate_content + Structured Output
-        response = client.models.generate_content(
+        response = generate_content_with_retry(client, 
             model="gemini-3.6-flash",
             contents=[uploaded, prompt],
             config=types.GenerateContentConfig(
@@ -558,7 +603,7 @@ def classify_segments_with_master(ai_segments, work_master):
 - 作業マスタ名そのものは変更しないでください。
 """
 
-    response = client.models.generate_content(
+    response = generate_content_with_retry(client, 
         model="gemini-3.6-flash",
         contents=prompt,
         config=types.GenerateContentConfig(
@@ -676,7 +721,7 @@ def analyze_data_improvements_with_gemini(segments):
 - 改善提案は最大5件程度にしてください。
 """
 
-    response = client.models.generate_content(
+    response = generate_content_with_retry(client, 
         model="gemini-3.6-flash",
         contents=prompt,
         config=types.GenerateContentConfig(
@@ -766,7 +811,7 @@ def analyze_video_improvements_with_gemini(
 - 改善案は製造現場で実行可能なレベルで具体化してください。
 """
 
-        response = client.models.generate_content(
+        response = generate_content_with_retry(client, 
             model="gemini-3.6-flash",
             contents=[uploaded, prompt],
             config=types.GenerateContentConfig(
@@ -850,7 +895,7 @@ def analyze_motion_with_gemini(video_bytes, filename, segments):
 - 入力された作業区間と同じ順番・同じ件数で結果を返してください。
 - 各動作要素のstart_time/end_timeは動画内の実際の時刻を使用してください。
 """
-        response = client.models.generate_content(
+        response = generate_content_with_retry(client, 
             model="gemini-3.6-flash",
             contents=[uploaded, prompt],
             config=types.GenerateContentConfig(
@@ -960,7 +1005,7 @@ def analyze_kaizen_with_gemini(video_bytes, filename, segments, motion_analysis)
 {motion_text}
 
 不要な移動、運搬、待ち、持ち替え、取り直し、繰り返し動作、工具・部品配置、作業順序、姿勢、手の使い方、長時間区間、高頻度動作に注目してください。映像で確認できる事実・データ・原因仮説を区別し、evidenceには可能な限り時刻を含めてください。改善案は最大5件、優先度は高・中・低。効果は断定せず期待される効果として記載してください。安全性や品質に悪影響を与える案は避けてください。"""
-        response=client.models.generate_content(model='gemini-3.6-flash',contents=[uploaded,prompt],config=types.GenerateContentConfig(response_mime_type='application/json',response_schema=KaizenAnalysis))
+        response=generate_content_with_retry(client, model='gemini-3.6-flash',contents=[uploaded,prompt],config=types.GenerateContentConfig(response_mime_type='application/json',response_schema=KaizenAnalysis))
         parsed=getattr(response,'parsed',None)
         return parsed if parsed is not None else KaizenAnalysis.model_validate_json(response.text)
     finally:
